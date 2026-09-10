@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simulador de Acreção Planetária</title>
+  <style>
+    :root {
+      --bg: #050711;
+      --card: rgba(16, 23, 42, 0.75);
+      --border: rgba(255, 255, 255, 0.1);
+      --accent-rock: #f97316;
+      --accent-gas: #38bdf8;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: var(--bg); color: var(--text); overflow: hidden; height: 100vh; width: 100vw; }
+
+    #canvas-container { position: absolute; inset: 0; }
+    canvas { width: 100%; height: 100%; display: block; }
+
+    .ui-panel {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      background: var(--card);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 24px;
+      width: 360px;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+      z-index: 10;
+    }
+
+    h1 { font-size: 1.25rem; font-weight: 700; margin-bottom: 6px; letter-spacing: -0.02em; }
+    p.desc { font-size: 0.85rem; color: var(--text-muted); line-height: 1.4; margin-bottom: 18px; }
+
+    .btn-group { display: flex; gap: 8px; margin-bottom: 18px; }
+    button {
+      flex: 1;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text);
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    button:hover { background: rgba(255, 255, 255, 0.12); }
+    button.active-rock { background: var(--accent-rock); border-color: var(--accent-rock); color: #fff; }
+    button.active-gas { background: var(--accent-gas); border-color: var(--accent-gas); color: #020617; }
+
+    .metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+    .metric-card {
+      background: rgba(0, 0, 0, 0.25);
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      text-align: center;
+    }
+    .metric-label { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .metric-value { font-size: 1.25rem; font-weight: 700; margin-top: 4px; color: #fff; }
+
+    .legend {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      border-top: 1px solid var(--border);
+      padding-top: 12px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="ui-panel">
+    <h1>Acreção Planetária</h1>
+    <p class="desc">Varredura orbital de planetesimais e atração de gases.</p>
+
+    <div class="btn-group">
+      <button id="btn-rock" class="active-rock" onclick="setZone('rock')">Antes do Gelo<br>(Rochoso)</button>
+      <button id="btn-gas" onclick="setZone('gas')">Além do Gelo<br>(Gigante Gasoso)</button>
+    </div>
+
+    <!-- Interface simplificada e focada nos dados principais -->
+    <div class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-label">Massa Total</div>
+        <div id="m-mass" class="metric-value">1.0 M⊕</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Densidade</div>
+        <div id="m-density" class="metric-value">5.5 g/cm³</div>
+      </div>
+    </div>
+
+    <button style="width:100%; margin-bottom: 12px;" onclick="resetSimulation()">Reiniciar Simulação</button>
+
+    <div id="info-box" class="legend">
+      <strong>Região Rochosa:</strong> Matéria-prima escassa (~0,4% de metais e silicatos). O embrião limpa sua zona orbital, mas cessa o crescimento com massa modesta.
+    </div>
+  </div>
+
+  <div id="canvas-container">
+    <canvas id="sim"></canvas>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("sim");
+    const ctx = canvas.getContext("2d");
+
+    let width, height, centerX, centerY;
+    let mode = 'rock'; 
+    let planet = { x: 0, y: 0, r: 12, mass: 1, gasMass: 0, orbitRadius: 180, angle: 0 };
+    let planetesimals = [];
+    let gasParticles = [];
+    
+    const NUM_PLANETESIMALS = 300;
+    const NUM_GAS = 600; // Aumentado para uma nuvem de gás mais densa
+
+    function resize() {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+      centerX = width / 2;
+      centerY = height / 2;
+    }
+    window.addEventListener("resize", resize);
+    resize();
+
+    function setZone(newMode) {
+      mode = newMode;
+      document.getElementById("btn-rock").className = mode === 'rock' ? 'active-rock' : '';
+      document.getElementById("btn-gas").className = mode === 'gas' ? 'active-gas' : '';
+      
+      const infoBox = document.getElementById("info-box");
+      if (mode === 'rock') {
+        infoBox.innerHTML = "<strong>Região Rochosa:</strong> Matéria escassa (~0,4% silicatos/ferro). O núcleo limpa sua trilha, mas permanece pequeno e denso, incapaz de reter gases leves.";
+      } else {
+        infoBox.innerHTML = "<strong>Além da Linha de Congelo:</strong> Núcleos de gelo/rocha crescem rápido. Sua forte gravidade puxa o gás da nebulosa, inflando o planeta de forma colossal e derrubando sua densidade.";
+      }
+      resetSimulation();
+    }
+
+    function resetSimulation() {
+      planetesimals = [];
+      gasParticles = [];
+      planet.angle = 0;
+      
+      // No modo gasoso, ele já começa como um núcleo de gelo um pouco mais massivo
+      planet.mass = mode === 'rock' ? 1 : 3.5; 
+      planet.gasMass = 0;
+      planet.r = mode === 'rock' ? 10 : 16;
+      planet.orbitRadius = mode === 'rock' ? Math.min(width, height) * 0.22 : Math.min(width, height) * 0.38;
+
+      const innerLimit = planet.orbitRadius - 85;
+      const outerLimit = planet.orbitRadius + 85;
+
+      // Gerar Planetesimais (rochas/gelo)
+      for (let i = 0; i < NUM_PLANETESIMALS; i++) {
+        const rad = innerLimit + Math.random() * (outerLimit - innerLimit);
+        planetesimals.push({
+          angle: Math.random() * Math.PI * 2,
+          radius: rad,
+          size: Math.random() * 2.5 + 1.2,
+          speed: (0.015 * Math.sqrt(planet.orbitRadius / rad)) + (Math.random() - 0.5) * 0.002,
+          consumed: false
+        });
+      }
+
+      // Gerar Nebulosa de Gás (H e He) apenas para a região gasosa
+      if (mode === 'gas') {
+        for (let i = 0; i < NUM_GAS; i++) {
+          const rad = innerLimit - 40 + Math.random() * (outerLimit - innerLimit + 80);
+          gasParticles.push({
+            angle: Math.random() * Math.PI * 2,
+            radius: rad,
+            speed: 0.012 * Math.sqrt(planet.orbitRadius / rad),
+            consumed: false
+          });
+        }
+      }
+    }
+
+    function update() {
+      // Movimento orbital do planeta
+      const orbitSpeed = 0.008;
+      planet.angle += orbitSpeed;
+      planet.x = centerX + Math.cos(planet.angle) * planet.orbitRadius;
+      planet.y = centerY + Math.sin(planet.angle) * planet.orbitRadius;
+
+      // Alcance gravitacional para rochas e gases (cresce com o tamanho do planeta)
+      const gravityReach = planet.r * 2.5;
+      const gasGravityReach = planet.r * 4.5; // Gás é sugado de bem mais longe
+
+      // Captura de planetesimais sólidos
+      planetesimals.forEach(p => {
+        if (p.consumed) return;
+        p.angle += p.speed;
+        const px = centerX + Math.cos(p.angle) * p.radius;
+        const py = centerY + Math.sin(p.angle) * p.radius;
+        const dist = Math.hypot(planet.x - px, planet.y - py);
+
+        if (dist < gravityReach) {
+          p.radius += (planet.orbitRadius - p.radius) * 0.1;
+          p.angle += (planet.angle - p.angle) * 0.06;
+        }
+
+        // Colisão sólida
+        if (dist < planet.r) {
+          p.consumed = true;
+          planet.mass += mode === 'rock' ? 0.08 : 0.15;
+          // Crescimento sólido é modesto
+          planet.r += mode === 'rock' ? 0.12 : 0.15;
+        }
+      });
+
+      // Captura intensa de Gás (apenas no modo gigante gasoso)
+      if (mode === 'gas') {
+        gasParticles.forEach(g => {
+          if (g.consumed) return;
+          g.angle += g.speed;
+          const gx = centerX + Math.cos(g.angle) * g.radius;
+          const gy = centerY + Math.sin(g.angle) * g.radius;
+          const dist = Math.hypot(planet.x - gx, planet.y - gy);
+
+          // Efeito de redemoinho puxando o gás
+          if (dist < gasGravityReach) {
+            g.radius += (planet.orbitRadius - g.radius) * 0.08;
+            g.angle += (planet.angle - g.angle) * 0.08;
+          }
+
+          // Absorção do gás e crescimento agudo do tamanho (raio) do planeta
+          if (dist < planet.r + 10) {
+            g.consumed = true;
+            planet.gasMass += 0.25;
+            
+            // Aqui faz o planeta crescer agressivamente de volume até um limite visual
+            if (planet.r < 55) {
+              planet.r += 0.25; 
+            }
+          }
+        });
+      }
+
+      // Atualiza os dados na tela
+      const totalMass = planet.mass + planet.gasMass;
+      document.getElementById("m-mass").innerText = totalMass.toFixed(1) + " M⊕";
+      
+      // A densidade despenca à medida que o gás é retido (Rochoso estabiliza alto, Gás estabiliza baixo)
+      const density = mode === 'rock' 
+        ? (5.5 - (planet.mass * 0.02)).toFixed(2) 
+        : Math.max(0.6, (4.5 - (planet.gasMass * 0.08))).toFixed(2);
+        
+      document.getElementById("m-density").innerText = density + " g/cm³";
+    }
+
+    function draw() {
+      ctx.fillStyle = "#050711";
+      ctx.fillRect(0, 0, width, height);
+
+      // Sol no centro
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, 35, 0, Math.PI * 2);
+      ctx.fillStyle = "#fbbf24";
+      ctx.shadowColor = "#f59e0b";
+      ctx.shadowBlur = 50;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // Linha de Congelamento
+      const frostLineRadius = Math.min(width, height) * 0.3;
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, frostLineRadius, 0, Math.PI * 2);
+      ctx.strokeStyle = "rgba(56, 189, 248, 0.25)";
+      ctx.setLineDash([8, 8]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      
+      ctx.fillStyle = "rgba(56, 189, 248, 0.4)";
+      ctx.font = "11px monospace";
+      ctx.fillText("LINHA DE CONGELAMENTO (FROST LINE)", centerX + frostLineRadius - 110, centerY - 10);
+
+      // Órbita do planeta
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, planet.orbitRadius, 0, Math.PI * 2);
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
+      ctx.stroke();
+
+      // Desenhar poeira de gás (nebulosa)
+      gasParticles.forEach(g => {
+        if (g.consumed) return;
+        const gx = centerX + Math.cos(g.angle) * g.radius;
+        const gy = centerY + Math.sin(g.angle) * g.radius;
+        ctx.fillStyle = "rgba(56, 189, 248, 0.25)";
+        ctx.beginPath();
+        ctx.arc(gx, gy, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      // Desenhar planetesimais
+      planetesimals.forEach(p => {
+        if (p.consumed) return;
+        const px = centerX + Math.cos(p.angle) * p.radius;
+        const py = centerY + Math.sin(p.angle) * p.radius;
+        ctx.beginPath();
+        ctx.arc(px, py, p.size, 0, Math.PI * 2);
+        ctx.fillStyle = mode === 'rock' ? "#a8a29e" : "#bae6fd";
+        ctx.fill();
+      });
+
+      // Planeta
+      ctx.beginPath();
+      ctx.arc(planet.x, planet.y, planet.r, 0, Math.PI * 2);
+      
+      if (mode === 'rock') {
+        ctx.fillStyle = "#ea580c";
+        ctx.shadowColor = "#f97316";
+        ctx.shadowBlur = 15;
+      } else {
+        // Renderização do Gigante Gasoso (gradiente simulando atmosfera densa)
+        const grad = ctx.createRadialGradient(planet.x, planet.y, planet.r * 0.2, planet.x, planet.y, planet.r);
+        grad.addColorStop(0, "#0284c7");
+        grad.addColorStop(0.7, "#38bdf8");
+        grad.addColorStop(1, "rgba(224, 242, 254, 0.8)");
+        ctx.fillStyle = grad;
+        ctx.shadowColor = "#38bdf8";
+        ctx.shadowBlur = planet.r * 0.8; // Brilho cresce com o tamanho do planeta
+      }
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // Anel sutil de atração gravitacional
+      ctx.beginPath();
+      ctx.arc(planet.x, planet.y, planet.r * 1.5, 0, Math.PI * 2);
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.1)";
+      ctx.stroke();
+    }
+
+    function loop() {
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    resetSimulation();
+    loop();
+  </script>
+</body>
+</html>
